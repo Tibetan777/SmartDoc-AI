@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import "./Dashboard.css"; // แนะนำให้สร้างไฟล์ CSS แยกเพื่อจัดการตาราง
+import SmartUploadModal from "./SmartUploadModal"; // Import Modal
+import "./Dashboard.css";
 
-// --- Icons (คงเดิมจากที่คุณมี แต่เน้น Folder และ File) ---
+// --- Icons ---
 const FolderIcon = () => (
   <svg
     width="20"
@@ -32,6 +33,21 @@ const FileIcon = () => (
     <polyline points="13 2 13 9 20 9"></polyline>
   </svg>
 );
+const PlusIcon = () => (
+  <svg
+    width="20"
+    height="20"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <line x1="12" y1="5" x2="12" y2="19"></line>
+    <line x1="5" y1="12" x2="19" y2="12"></line>
+  </svg>
+);
 
 export default function Dashboard({ user, onLogout }) {
   const [documents, setDocuments] = useState([]);
@@ -39,35 +55,38 @@ export default function Dashboard({ user, onLogout }) {
   const [activeFolderId, setActiveFolderId] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showUploadModal, setShowUploadModal] = useState(false); // State ควบคุม Modal
   const navigate = useNavigate();
 
-  // 1. โหลดรายการโฟลเดอร์
+  // Load Folders
   const fetchFolders = async () => {
     try {
       const res = await fetch("/api/folders", {
         headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
       });
-      const data = await res.json();
-      setFolders(data);
+      if (res.ok) {
+        const data = await res.json();
+        setFolders(Array.isArray(data) ? data : []);
+      }
     } catch (err) {
-      console.error("Fetch folders error:", err);
+      console.error(err);
     }
   };
 
-  // 2. โหลดรายการไฟล์ (กรองตามโฟลเดอร์ที่เลือก)
+  // Load Files
   const fetchFiles = async (folderId = null, search = "") => {
     setLoading(true);
     try {
       let url = `/api/files?search=${search}`;
       if (folderId) url += `&folder_id=${folderId}`;
-
       const res = await fetch(url, {
         headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
       });
       const data = await res.json();
-      setDocuments(data);
+      setDocuments(Array.isArray(data) ? data : []);
     } catch (err) {
-      console.error("Fetch files error:", err);
+      console.error(err);
+      setDocuments([]);
     } finally {
       setLoading(false);
     }
@@ -83,9 +102,18 @@ export default function Dashboard({ user, onLogout }) {
     fetchFiles(activeFolderId, searchTerm);
   };
 
+  // ฟังก์ชันช่วยแกะ Tags ไม่ให้พัง
+  const parseTags = (tagData) => {
+    try {
+      return typeof tagData === "string" ? JSON.parse(tagData) : tagData || [];
+    } catch (e) {
+      return [];
+    }
+  };
+
   return (
     <div className="dashboard-container">
-      {/* Top Navbar (คงเดิมจากโค้ดเดิมของคุณ) */}
+      {/* Navbar */}
       <nav className="navbar">
         <div className="navbar-brand">SmartDoc AI</div>
         <form onSubmit={handleSearch} className="search-box">
@@ -98,14 +126,19 @@ export default function Dashboard({ user, onLogout }) {
         </form>
         <div className="user-profile">
           <span>{user?.name}</span>
-          <button onClick={onLogout}>Logout</button>
+          <button onClick={onLogout} className="btn-logout">
+            Logout
+          </button>
         </div>
       </nav>
 
       <div className="main-layout">
-        {/* Sidebar: แสดงรายการโฟลเดอร์ */}
+        {/* Sidebar */}
         <aside className="sidebar">
-          <button className="btn-new">New +</button>
+          <button className="btn-new" onClick={() => setShowUploadModal(true)}>
+            <PlusIcon /> New
+          </button>
+
           <div className="folder-list">
             <div
               className={`folder-item ${!activeFolderId ? "active" : ""}`}
@@ -125,44 +158,76 @@ export default function Dashboard({ user, onLogout }) {
           </div>
         </aside>
 
-        {/* Content: ตารางรายการไฟล์ */}
+        {/* File Table */}
         <main className="content">
-          <table className="file-table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Date Modified</th>
-                <th>Size</th>
-                <th>Tags</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
+          <div className="table-container">
+            <table className="file-table">
+              <thead>
                 <tr>
-                  <td colSpan="4">Loading...</td>
+                  <th>Name</th>
+                  <th>Date</th>
+                  <th>Size</th>
+                  <th>AI Tags</th>
                 </tr>
-              ) : (
-                documents.map((doc) => (
-                  <tr key={doc.id} onClick={() => navigate(`/file/${doc.id}`)}>
-                    <td>
-                      <FileIcon /> {doc.file_name}
-                    </td>
-                    <td>{new Date(doc.created_at).toLocaleDateString()}</td>
-                    <td>{doc.file_size || "N/A"}</td>
-                    <td>
-                      {JSON.parse(doc.tags || "[]").map((tag) => (
-                        <span key={tag} className="tag-badge">
-                          {tag}
-                        </span>
-                      ))}
+              </thead>
+              <tbody>
+                {loading ? (
+                  <tr>
+                    <td colSpan="4" className="text-center">
+                      Loading...
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                ) : documents.length > 0 ? (
+                  documents.map((doc) => (
+                    <tr
+                      key={doc.id}
+                      onClick={() => navigate(`/file/${doc.id}`)}
+                    >
+                      <td>
+                        <div className="file-name-cell">
+                          <FileIcon /> {doc.file_name}
+                        </div>
+                      </td>
+                      <td>
+                        {doc.created_at
+                          ? new Date(doc.created_at).toLocaleDateString()
+                          : "-"}
+                      </td>
+                      <td>{doc.file_size || "N/A"}</td>
+                      <td>
+                        <div className="tags-cell">
+                          {parseTags(doc.tags).map((tag, i) => (
+                            <span key={i} className="tag-badge">
+                              {tag}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan="4" className="text-center">
+                      No files found
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </main>
       </div>
+
+      {/* Render Modal */}
+      {showUploadModal && (
+        <SmartUploadModal
+          onClose={() => setShowUploadModal(false)}
+          onUploadSuccess={() => {
+            setShowUploadModal(false);
+            fetchFiles(activeFolderId, searchTerm); // Refresh ข้อมูลหลังอัปโหลด
+          }}
+        />
+      )}
     </div>
   );
 }

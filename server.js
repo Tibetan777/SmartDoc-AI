@@ -62,21 +62,24 @@ app.post("/api/login", async (req, res) => {
       [email],
     );
     const user = users[0];
-    if (
-      !user ||
-      !(await bcrypt.compare(password, user.password_encrypted || ""))
-    ) {
-      return res.status(401).json({ error: "Invalid credentials" });
-    }
+
+    if (!user) return res.status(401).json({ error: "ไม่พบอีเมลนี้ในระบบ" });
+
+    // ตรวจสอบรหัสผ่าน (bcrypt)
+    const validPass = await bcrypt.compare(password, user.password_encrypted);
+    if (!validPass)
+      return res.status(401).json({ error: "รหัสผ่านไม่ถูกต้อง" });
+
     const token = jwt.sign({ id: user.id_mem, role: user.role }, SECRET, {
       expiresIn: "24h",
     });
+
     res.json({
       token,
       user: { id: user.id_mem, name: user.name_mem, role: user.role },
     });
   } catch (err) {
-    res.status(500).json({ error: "Login failed" });
+    res.status(500).json({ error: "เกิดข้อผิดพลาดที่เซิร์ฟเวอร์" });
   }
 });
 

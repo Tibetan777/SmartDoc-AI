@@ -1,16 +1,9 @@
 import { useState, useEffect } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Login from "./components/login/Login";
-import Dashboard from "./components/dashboard/Dashboard";
-// import DocumentWorkspace from "./components/workspace/DocumentWorkspace"; // สร้างไฟล์นี้ในขั้นตอนถัดไป
+import Dashboard from "./components/Dashboard/Dashboard"; // ตรวจสอบตัวพิมพ์เล็ก-ใหญ่ของโฟลเดอร์
+import DocumentWorkspace from "./components/workspace/DocumentWorkspace";
 import "./App.css";
-
-// Placeholder สำหรับหน้า Workspace ที่ยังไม่ได้สร้าง
-const DocumentWorkspace = () => (
-  <div style={{ color: "white", padding: 20 }}>
-    Document Workspace (Under Construction)
-  </div>
-);
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -19,7 +12,6 @@ export default function App() {
   useEffect(() => {
     const token = localStorage.getItem("token");
     const savedUser = localStorage.getItem("user");
-
     if (token && savedUser) {
       setUser(JSON.parse(savedUser));
     }
@@ -37,28 +29,12 @@ export default function App() {
     setUser(null);
   };
 
-  if (loading) {
-    return (
-      <div
-        className="loading-screen"
-        style={{
-          background: "#0f0f0f",
-          minHeight: "100vh",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          color: "#1A73E8",
-        }}
-      >
-        <h2>Initialize SmartDoc AI...</h2>
-      </div>
-    );
-  }
+  // src/App.jsx
+  if (loading) return <div className="loading-screen">Loading SmartDoc...</div>; // ต้องมี UI บอก
 
   return (
     <BrowserRouter>
       <Routes>
-        {/* Route สำหรับหน้า Login */}
         <Route
           path="/login"
           element={
@@ -69,8 +45,6 @@ export default function App() {
             )
           }
         />
-
-        {/* Route หลักคือ Dashboard */}
         <Route
           path="/"
           element={
@@ -81,17 +55,7 @@ export default function App() {
             )
           }
         />
-
-        {/* Route สำหรับเปิดดูเอกสารแต่ละไฟล์ */}
-        <Route
-          path="/file/:id"
-          element={
-            user ? <DocumentWorkspace user={user} /> : <Navigate to="/login" />
-          }
-        />
-
-        {/* Fallback */}
-        <Route path="*" element={<Navigate to="/" />} />
+        {/* ... อื่น ๆ ... */}
       </Routes>
     </BrowserRouter>
   );

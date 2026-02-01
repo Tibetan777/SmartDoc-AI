@@ -14,57 +14,46 @@ export default function DocumentWorkspace() {
   }, [id]);
 
   return (
-    <div
-      className="workspace-container"
-      style={{ display: "flex", height: "100vh" }}
-    >
-      {/* ฝั่งซ้าย: ตัวดูเอกสาร */}
-      <div
-        className="viewer-panel"
-        style={{ flex: 1, borderRight: "1px solid #ddd" }}
-      >
+    <div style={{ display: "flex", height: "100vh" }}>
+      <div style={{ flex: 1, borderRight: "1px solid #ddd" }}>
         {file ? (
           <iframe
             src={`/uploads/${file.file_path}`}
             width="100%"
             height="100%"
-            title="Document Viewer"
+            title="viewer"
           />
         ) : (
-          <p>กำลังโหลดเอกสาร...</p>
+          <p>กำลังโหลดไฟล์...</p>
         )}
       </div>
-
-      {/* ฝั่งขวา: AI Assistant */}
       <div
-        className="ai-panel"
-        style={{ width: "400px", display: "flex", flexDirection: "column" }}
+        style={{
+          width: "400px",
+          padding: "20px",
+          display: "flex",
+          flexDirection: "column",
+        }}
       >
+        <h3>AI Assistant</h3>
         <div
-          className="ai-header"
-          style={{ padding: "20px", borderBottom: "1px solid #ddd" }}
+          style={{
+            flex: 1,
+            overflowY: "auto",
+            background: "#f9f9f9",
+            padding: "15px",
+            borderRadius: "8px",
+          }}
         >
-          <h3>AI Assistant</h3>
+          <p>
+            <b>AI:</b> สรุปเนื้อหาสำคัญในเอกสารฉบับนี้คือ...
+          </p>
         </div>
-        <div
-          className="chat-history"
-          style={{ flex: 1, padding: "20px", overflowY: "auto" }}
-        >
-          <div className="ai-message">
-            สวัสดีครับ! ผมเป็น AI ผู้ช่วยส่วนตัวของคุณ
-            มีอะไรให้ช่วยวิเคราะห์เอกสารนี้ไหมครับ?
-          </div>
-        </div>
-        <div
-          className="chat-input"
-          style={{ padding: "20px", borderTop: "1px solid #ddd" }}
-        >
-          <input
-            type="text"
-            placeholder="ถาม AI เกี่ยวกับเอกสารนี้..."
-            style={{ width: "100%", padding: "10px" }}
-          />
-        </div>
+        <input
+          type="text"
+          placeholder="ถาม AI เกี่ยวกับไฟล์นี้..."
+          style={{ marginTop: "15px", padding: "10px" }}
+        />
       </div>
     </div>
   );
