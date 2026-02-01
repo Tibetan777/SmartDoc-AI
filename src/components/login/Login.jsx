@@ -3,6 +3,7 @@ import "./Login.css";
 
 export default function Login({ onLoginSuccess }) {
   const [isRegister, setIsRegister] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [formData, setFormData] = useState({
     name: "",
     email: "",
@@ -11,7 +12,9 @@ export default function Login({ onLoginSuccess }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setLoading(true);
     const endpoint = isRegister ? "/api/register" : "/api/login";
+
     try {
       const res = await fetch(endpoint, {
         method: "POST",
@@ -19,19 +22,23 @@ export default function Login({ onLoginSuccess }) {
         body: JSON.stringify(formData),
       });
       const data = await res.json();
+
       if (res.ok) {
         if (!isRegister) {
           localStorage.setItem("token", data.token);
           onLoginSuccess(data.user);
         } else {
-          alert("ลงทะเบียนสำเร็จ");
+          alert("สมัครสมาชิกสำเร็จ! กรุณาเข้าสู่ระบบ");
           setIsRegister(false);
+          setFormData({ name: "", email: "", password: "" }); // Clear form
         }
       } else {
-        alert(data.error);
+        alert(data.error || "เกิดข้อผิดพลาด");
       }
     } catch (err) {
-      alert("เกิดข้อผิดพลาด");
+      alert("ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -39,11 +46,16 @@ export default function Login({ onLoginSuccess }) {
     <div className="login-container">
       <div className="auth-card">
         <h1>SmartDoc AI</h1>
+        <p className="auth-subtitle">
+          {isRegister ? "Create your workspace" : "Welcome back"}
+        </p>
+
         <form onSubmit={handleSubmit}>
           {isRegister && (
             <input
               type="text"
-              placeholder="ชื่อ"
+              placeholder="Full Name"
+              value={formData.name}
               required
               onChange={(e) =>
                 setFormData({ ...formData, name: e.target.value })
@@ -52,7 +64,8 @@ export default function Login({ onLoginSuccess }) {
           )}
           <input
             type="email"
-            placeholder="อีเมล"
+            placeholder="Email Address"
+            value={formData.email}
             required
             onChange={(e) =>
               setFormData({ ...formData, email: e.target.value })
@@ -60,21 +73,29 @@ export default function Login({ onLoginSuccess }) {
           />
           <input
             type="password"
-            placeholder="รหัสผ่าน"
+            placeholder="Password"
+            value={formData.password}
             required
             onChange={(e) =>
               setFormData({ ...formData, password: e.target.value })
             }
           />
-          <button type="submit">
-            {isRegister ? "สมัครสมาชิก" : "เข้าสู่ระบบ"}
+          <button
+            type="submit"
+            disabled={loading}
+            className={loading ? "loading-btn" : ""}
+          >
+            {loading ? "Processing..." : isRegister ? "Sign Up" : "Log In"}
           </button>
         </form>
+
         <button
           className="toggle-btn"
           onClick={() => setIsRegister(!isRegister)}
         >
-          {isRegister ? "มีบัญชีแล้ว? เข้าสู่ระบบ" : "สมัครสมาชิกใหม่"}
+          {isRegister
+            ? "Already have an account? Log In"
+            : "Don't have an account? Sign Up"}
         </button>
       </div>
     </div>

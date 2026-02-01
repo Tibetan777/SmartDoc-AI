@@ -17,19 +17,14 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const SECRET = process.env.JWT_SECRET;
+const SECRET = process.env.JWT_SECRET || "smartdoc-secret-key"; // ใส่ Default กันลืม
 
-// Initial Setup
-if (!SECRET) {
-  console.error("FATAL: JWT_SECRET missing");
-  process.exit(1);
-}
 if (!fs.existsSync("uploads")) fs.mkdirSync("uploads");
 
 app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(compression());
 app.use(cors());
-app.use(express.json({ limit: "50mb" })); // เพิ่ม Limit สำหรับไฟล์ใหญ่
+app.use(express.json({ limit: "50mb" }));
 app.use("/uploads", express.static("uploads"));
 
 const pool = mysql.createPool({
@@ -41,7 +36,7 @@ const pool = mysql.createPool({
   connectionLimit: 50,
 });
 
-// Middleware
+// Middleware Auth
 const auth = (req, res, next) => {
   const token = req.headers["authorization"]?.split(" ")[1];
   if (!token) return res.status(401).json({ error: "Unauthorized" });
@@ -53,7 +48,27 @@ const auth = (req, res, next) => {
   }
 };
 
-// --- AUTH ROUTES ---
+// --- AUTH ROUTES (Epic 1) ---
+app.post("/api/register", async (req, res) => {
+  const { name, email, password } = req.body;
+  // Validation
+  if (!name || !email || !password)
+    return res.status(400).json({ error: "กรุณากรอกข้อมูลให้ครบ" });
+
+  try {
+    const hashed = await bcrypt.hash(password, 10);
+    // ใช้ชื่อคอลัมน์ให้ตรงกับ SQL (name_mem, email_mem)
+    const [result] = await pool.query(
+      "INSERT INTO members (name_mem, email_mem, password_encrypted, role) VALUES (?, ?, ?, ?)",
+      [name, email, hashed, "user"],
+    );
+    res.json({ success: true, id: result.insertId });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: "อีเมลนี้ถูกใช้งานแล้ว หรือเกิดข้อผิดพลาด" });
+  }
+});
+
 app.post("/api/login", async (req, res) => {
   const { email, password } = req.body;
   try {
@@ -62,28 +77,25 @@ app.post("/api/login", async (req, res) => {
       [email],
     );
     const user = users[0];
-
-    if (!user) return res.status(401).json({ error: "ไม่พบอีเมลนี้ในระบบ" });
-
-    // ตรวจสอบรหัสผ่าน (bcrypt)
-    const validPass = await bcrypt.compare(password, user.password_encrypted);
-    if (!validPass)
-      return res.status(401).json({ error: "รหัสผ่านไม่ถูกต้อง" });
-
+    if (
+      !user ||
+      !(await bcrypt.compare(password, user.password_encrypted || ""))
+    ) {
+      return res.status(401).json({ error: "อีเมลหรือรหัสผ่านไม่ถูกต้อง" });
+    }
     const token = jwt.sign({ id: user.id_mem, role: user.role }, SECRET, {
       expiresIn: "24h",
     });
-
     res.json({
       token,
       user: { id: user.id_mem, name: user.name_mem, role: user.role },
     });
   } catch (err) {
-    res.status(500).json({ error: "เกิดข้อผิดพลาดที่เซิร์ฟเวอร์" });
+    res.status(500).json({ error: "Login failed" });
   }
 });
 
-// --- FOLDER ROUTES ---
+// --- FOLDER & FILES (Epic 2 & 3) ---
 app.get("/api/folders", auth, async (req, res) => {
   try {
     const [rows] = await pool.query(
@@ -97,26 +109,25 @@ app.get("/api/folders", auth, async (req, res) => {
 });
 
 app.post("/api/folders", auth, async (req, res) => {
-  const { name, parent_id } = req.body;
+  const { name } = req.body;
   try {
     const [result] = await pool.query(
-      "INSERT INTO folders (name, user_id, parent_id) VALUES (?, ?, ?)",
-      [name, req.user.id, parent_id || null],
+      "INSERT INTO folders (name, user_id) VALUES (?, ?)",
+      [name, req.user.id],
     );
     res.json({ id: result.insertId, name });
   } catch (err) {
-    res.status(500).json({ error: "Cannot create folder" });
+    res.status(500).json({ error: "สร้างโฟลเดอร์ไม่สำเร็จ" });
   }
 });
 
-// --- DOCUMENT ROUTES ---
+// Search & List Files (Epic 7)
 app.get("/api/files", auth, async (req, res) => {
   try {
     const { folder_id, search } = req.query;
-    let query = `SELECT d.*, mem.name_mem as uploader
-                FROM documents d
-                JOIN members mem ON d.user_id = mem.id_mem
-                WHERE d.user_id = ?`;
+    let query = `SELECT d.*, mem.name_mem as uploader FROM documents d 
+                 JOIN members mem ON d.user_id = mem.id_mem 
+                 WHERE d.user_id = ?`;
     const params = [req.user.id];
 
     if (folder_id) {
@@ -124,8 +135,8 @@ app.get("/api/files", auth, async (req, res) => {
       params.push(folder_id);
     }
     if (search) {
-      query += " AND d.file_name LIKE ?";
-      params.push(`%${search}%`);
+      query += " AND (d.file_name LIKE ? OR d.tags LIKE ?)";
+      params.push(`%${search}%`, `%${search}%`);
     }
 
     query += " ORDER BY d.created_at DESC";
@@ -136,23 +147,42 @@ app.get("/api/files", auth, async (req, res) => {
   }
 });
 
-// Smart Upload & AI Analyze
+// Upload & AI Grouping (Epic 3 & 2)
+app.post("/api/files/analyze", auth, (req, res) => {
+  const { files } = req.body;
+  // Mock AI Logic: แยกหมวดหมู่ตามชื่อไฟล์
+  const suggestions = files.map((name) => {
+    let folder = "General";
+    const n = name.toLowerCase();
+    if (n.includes("invoice") || n.includes("slip") || n.includes("money"))
+      folder = "Finance";
+    else if (n.includes("contract") || n.includes("legal") || n.includes("nda"))
+      folder = "Legal";
+    else if (n.includes("plan") || n.includes("slide") || n.includes("project"))
+      folder = "Projects";
+    return { fileName: name, suggestedFolder: folder };
+  });
+  res.json(suggestions);
+});
+
 app.post("/api/files/upload", auth, async (req, res) => {
-  const { fileName, fileData, folderId, tags } = req.body; // fileData is base64
+  const { fileName, fileData, folderId, tags } = req.body;
   try {
     const extension = fileName.split(".").pop();
     const uniqueName = `${uuidv4()}.${extension}`;
-
-    // Save binary file
     const base64Data = fileData.replace(/^data:.*?;base64,/, "");
+
     fs.writeFileSync(
       path.join("uploads", uniqueName),
       Buffer.from(base64Data, "base64"),
     );
 
+    // Mock Summary (Epic 4) - สร้างสรุปอัตโนมัติเมื่ออัปโหลด
+    const mockSummary = `เอกสารนี้คือ ${fileName} เป็นไฟล์ประเภท ${extension} ที่เกี่ยวข้องกับ ${tags?.[0] || "ทั่วไป"} สาระสำคัญคือการจัดการข้อมูลตามโครงสร้าง SmartDoc AI`;
+
     const [result] = await pool.query(
-      `INSERT INTO documents (file_name, file_path, file_type, file_size, user_id, folder_id, tags) 
-      VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO documents (file_name, file_path, file_type, file_size, user_id, folder_id, tags, content_summary) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         fileName,
         uniqueName,
@@ -161,60 +191,16 @@ app.post("/api/files/upload", auth, async (req, res) => {
         req.user.id,
         folderId || null,
         JSON.stringify(tags || []),
+        mockSummary,
       ],
     );
-
     res.json({ success: true, id: result.insertId });
   } catch (err) {
     res.status(500).json({ error: "Upload failed" });
   }
 });
 
-// Mock AI Analyze Endpoint (สำหรับการจัดกลุ่มก่อนบันทึก)
-app.post("/api/files/analyze", auth, (req, res) => {
-  const { files } = req.body; // รับ array ของชื่อไฟล์
-  const suggestions = files.map((name) => {
-    let folder = "General";
-    if (
-      name.toLowerCase().includes("invoice") ||
-      name.toLowerCase().includes("slip")
-    )
-      folder = "Finance";
-    if (
-      name.toLowerCase().includes("legal") ||
-      name.toLowerCase().includes("contract")
-    )
-      folder = "Legal";
-    if (
-      name.toLowerCase().includes("slide") ||
-      name.toLowerCase().includes("lecture")
-    )
-      folder = "Education";
-    return { fileName: name, suggestedFolder: folder };
-  });
-  res.json(suggestions);
-});
-
-app.delete("/api/files/:id", auth, async (req, res) => {
-  try {
-    const [file] = await pool.query(
-      "SELECT file_path FROM documents WHERE id = ? AND user_id = ?",
-      [req.params.id, req.user.id],
-    );
-    if (!file[0]) return res.status(404).json({ error: "File not found" });
-
-    // Delete Physical File
-    const fullPath = path.join("uploads", file[0].file_path);
-    if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
-
-    await pool.query("DELETE FROM documents WHERE id = ?", [req.params.id]);
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: "Delete failed" });
-  }
-});
-
-// GET Document Details for Workspace
+// --- DOCUMENT INTELLIGENCE (Epic 4 & 5) ---
 app.get("/api/files/:id", auth, async (req, res) => {
   try {
     const [rows] = await pool.query(
@@ -226,6 +212,19 @@ app.get("/api/files/:id", auth, async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// AI Chat Endpoint (Epic 5)
+app.post("/api/chat", auth, async (req, res) => {
+  const { message, fileId } = req.body;
+  // Mock AI Response
+  // ในอนาคตเชื่อม OpenAI API ตรงนี้ 
+  setTimeout(() => {
+    res.json({
+      role: "ai",
+      text: `จากการวิเคราะห์ไฟล์ ID ${fileId}: คำถามของคุณที่ว่า "${message}" \nAI พบว่าเอกสารนี้มีเนื้อหาที่เกี่ยวข้องกับเรื่องดังกล่าวในหน้า 1 ย่อหน้าที่ 2 โดยระบุถึงความสำคัญของการจัดการเอกสาร (นี่คือการจำลองคำตอบ)`,
+    });
+  }, 1000); // Delay 1 วิ ให้ดูเหมือนคิด
 });
 
 app.listen(PORT, () =>
