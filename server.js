@@ -110,10 +110,10 @@ app.post("/api/folders", auth, async (req, res) => {
 app.get("/api/files", auth, async (req, res) => {
   try {
     const { folder_id, search } = req.query;
-    let query = `SELECT d.*, mem.name_mem as uploader 
-                 FROM documents d 
-                 JOIN members mem ON d.user_id = mem.id_mem 
-                 WHERE d.user_id = ?`;
+    let query = `SELECT d.*, mem.name_mem as uploader
+                FROM documents d
+                JOIN members mem ON d.user_id = mem.id_mem
+                WHERE d.user_id = ?`;
     const params = [req.user.id];
 
     if (folder_id) {
@@ -149,7 +149,7 @@ app.post("/api/files/upload", auth, async (req, res) => {
 
     const [result] = await pool.query(
       `INSERT INTO documents (file_name, file_path, file_type, file_size, user_id, folder_id, tags) 
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [
         fileName,
         uniqueName,

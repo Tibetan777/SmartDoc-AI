@@ -1,176 +1,81 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import "./Login.css";
 
 export default function Login({ onLoginSuccess }) {
   const [isRegister, setIsRegister] = useState(false);
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState(""); // 🔥 เพิ่มตัวแปร Confirm Password
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [darkMode, setDarkMode] = useState(
-    () => localStorage.getItem("theme") === "dark",
-  );
-
-  const API = "/api";
-
-  // จัดการ Theme (เหมือนหน้า Home)
-  useEffect(() => {
-    if (darkMode) document.body.classList.add("dark-mode");
-    else document.body.classList.remove("dark-mode");
-  }, [darkMode]);
-
-  const toggleTheme = () => {
-    setDarkMode((prev) => {
-      const newMode = !prev;
-      localStorage.setItem("theme", newMode ? "dark" : "light");
-      return newMode;
-    });
-  };
+  const [formData, setFormData] = useState({
+    name: "",
+    email: "",
+    password: "",
+  });
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setError("");
-
-    // เช็คว่า Confirm Password ตรงกันไหม (เฉพาะตอนสมัคร)
-    if (isRegister && password !== confirmPassword) {
-      setError("Passwords do not match!");
-      return;
-    }
-
-    setLoading(true);
-
+    const endpoint = isRegister ? "/api/register" : "/api/login";
     try {
-      const endpoint = isRegister ? "/register" : "/login";
-      const body = isRegister ? { name, email, password } : { email, password };
-
-      const res = await fetch(`${API}${endpoint}`, {
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify(formData),
       });
-
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Error");
-
-      if (isRegister) {
-        alert("Register Successful! Please Login.");
-        setIsRegister(false);
-        setName("");
-        setPassword("");
-        setConfirmPassword("");
-        setLoading(false);
-        return;
+      if (res.ok) {
+        if (!isRegister) {
+          localStorage.setItem("token", data.token);
+          onLoginSuccess(data.user);
+        } else {
+          alert("สมัครสมาชิกสำเร็จ! กรุณาเข้าสู่ระบบ");
+          setIsRegister(false);
+        }
+      } else {
+        alert(data.error);
       }
-
-      localStorage.setItem("token", data.token);
-      localStorage.setItem("user", JSON.stringify(data.user));
-      setTimeout(() => onLoginSuccess(data.user), 500);
     } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
+      alert("เกิดข้อผิดพลาด");
     }
   };
 
   return (
-    <div className="login-container">
-      {/* ปุ่มเปลี่ยน Theme มุมขวาบน */}
-      <button className="theme-toggle-login" onClick={toggleTheme}>
-        {darkMode ? "☀️" : "🌙"}
-      </button>
-
-      <div className="login-box">
-        <div className="login-header">
-          <h1 className="brand-logo">MemeHub</h1>
-          <h2>{isRegister ? "Create Account" : "Welcome Back"}</h2>
-          <p>{isRegister ? "Join the community" : "Login to continue"}</p>
-        </div>
-
-        {error && <div className="alert alert-error">{error}</div>}
-
+    <div className="login-page">
+      <div className="auth-card">
+        <h1>SmartDoc AI</h1>
+        <p>{isRegister ? "สร้างบัญชีใหม่" : "ยินดีต้อนรับกลับมา"}</p>
         <form onSubmit={handleSubmit}>
           {isRegister && (
-            <div className="form-group">
-              <label>Name</label>
-              <input
-                type="text"
-                placeholder="Your name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                required={isRegister}
-              />
-            </div>
-          )}
-
-          <div className="form-group">
-            <label>Email</label>
             <input
-              type="email"
-              placeholder="name@example.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              type="text"
+              placeholder="ชื่อเต็ม"
               required
+              onChange={(e) =>
+                setFormData({ ...formData, name: e.target.value })
+              }
             />
-          </div>
-
-          <div className="form-group">
-            <label>Password</label>
-            <input
-              type="password"
-              placeholder="••••••••"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-            />
-          </div>
-
-          {/* ช่อง Confirm Password (แสดงเฉพาะตอน Register) */}
-          {isRegister && (
-            <div className="form-group">
-              <label>Confirm Password</label>
-              <input
-                type="password"
-                placeholder="••••••••"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                required={isRegister}
-                className={
-                  confirmPassword && password !== confirmPassword
-                    ? "input-error"
-                    : ""
-                }
-              />
-            </div>
           )}
-
-          <button type="submit" className="login-button" disabled={loading}>
-            {loading ? "Processing..." : isRegister ? "Sign Up" : "Sign In"}
+          <input
+            type="email"
+            placeholder="อีเมล"
+            required
+            onChange={(e) =>
+              setFormData({ ...formData, email: e.target.value })
+            }
+          />
+          <input
+            type="password"
+            placeholder="รหัสผ่าน"
+            required
+            onChange={(e) =>
+              setFormData({ ...formData, password: e.target.value })
+            }
+          />
+          <button type="submit" className="btn-primary">
+            {isRegister ? "สมัครสมาชิก" : "เข้าสู่ระบบ"}
           </button>
         </form>
-
-        <div className="login-footer">
-          <p>
-            {isRegister
-              ? "Already have an account? "
-              : "Don't have an account? "}
-            <a
-              href="#"
-              onClick={(e) => {
-                e.preventDefault();
-                setIsRegister(!isRegister);
-                setError("");
-                setName("");
-                setEmail("");
-                setPassword("");
-                setConfirmPassword("");
-              }}
-            >
-              {isRegister ? "Sign In" : "Sign Up"}
-            </a>
-          </p>
-        </div>
+        <button className="btn-flat" onClick={() => setIsRegister(!isRegister)}>
+          {isRegister
+            ? "มีบัญชีอยู่แล้ว? เข้าสู่ระบบ"
+            : "ยังไม่มีบัญชี? สมัครสมาชิก"}
+        </button>
       </div>
     </div>
   );
