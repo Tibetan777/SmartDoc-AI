@@ -1,361 +1,325 @@
-import express from 'express';
-import mysql from 'mysql2/promise';
-import cors from 'cors';
-import bcrypt from 'bcrypt';
-import jwt from 'jsonwebtoken';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import express from "express";
+import mysql from "mysql2/promise";
+import cors from "cors";
+import jwt from "jsonwebtoken";
+import bcrypt from "bcryptjs";
+import helmet from "helmet";
+import compression from "compression";
+import rateLimit from "express-rate-limit";
+import fs from "fs";
+import path from "path";
+import { v4 as uuidv4 } from "uuid";
+import Joi from "joi";
+import dotenv from "dotenv";
+import { fileURLToPath } from "url";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const envPath = path.join(__dirname, ".env");
+
+console.log("Loading .env from:", envPath);
+dotenv.config({ path: envPath });
+
 const app = express();
-const PORT = process.env.PORT || 5173;
-const SECRET_KEY = 'meme-hub-secret-key-2024';
+const PORT = process.env.PORT || 3000;
+const SECRET = process.env.JWT_SECRET;
 
-app.use(express.static(path.join(__dirname, 'dist')));
+if (!SECRET) {
+  console.error("FATAL: JWT_SECRET missing");
+  process.exit(1);
+}
+if (!fs.existsSync("uploads")) fs.mkdirSync("uploads");
+
+app.use(helmet({ crossOriginResourcePolicy: false }));
+app.use(compression());
 app.use(cors());
-app.use(express.json({ limit: '50mb' }));
+app.use(express.json({ limit: "10mb" }));
+app.set("trust proxy", 1);
+app.use("/uploads", express.static("uploads", { maxAge: "1y", etag: false }));
 
 const pool = mysql.createPool({
-  host: 'localhost',
-  user: 'root',
-  password: '',
-  database: 'Narongrit',
-  connectionLimit: 10
+  host: process.env.DB_HOST,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME,
+  waitForConnections: true,
+  connectionLimit: 50,
+  queueLimit: 0,
 });
 
-// Initialize database
-async function initDatabase() {
+const auth = (req, res, next) => {
+  const token = req.headers["authorization"]?.split(" ")[1];
+  if (!token) return res.status(401).json({ error: "Unauthorized" });
+  try {
+    req.user = jwt.verify(token, SECRET);
+    next();
+  } catch {
+    res.status(403).json({ error: "Invalid Token" });
+  }
+};
+
+const optionalAuth = (req, res, next) => {
+  const token = req.headers["authorization"]?.split(" ")[1];
+  if (token) {
+    try {
+      req.user = jwt.verify(token, SECRET);
+    } catch (e) {}
+  }
+  next();
+};
+
+// ... (Login/Register/Categories Routes เหมือนเดิม) ...
+app.post("/api/login", async (req, res) => {
+  const { email, password } = req.body;
+  try {
+    const [users] = await pool.query(
+      "SELECT * FROM members WHERE email_mem = ?",
+      [email],
+    );
+    const user = users[0];
+    if (
+      !user ||
+      !!(await bcrypt.compare(password, user.password_encrypted || ""))
+    ) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+    const token = jwt.sign({ id: user.id_mem, role: user.role }, SECRET, {
+      expiresIn: "24h",
+    });
+    res.json({
+      token,
+      user: { id: user.id_mem, name: user.name_mem, role: user.role },
+    });
+  } catch (err) {
+    res.status(500).json({ error: "Error" });
+  }
+});
+
+app.post("/api/register", async (req, res) => {
+  const { name, email, password } = req.body;
+  try {
+    const hashed = await bcrypt.hash(password, 10);
+    await pool.query(
+      "INSERT INTO members (name_mem, email_mem, password_encrypted, role) VALUES (?, ?, ?, ?)",
+      [name, email, hashed, "user"],
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(400).json({ error: "Email exists" });
+  }
+});
+
+app.get("/api/categories", async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      "SELECT name FROM categories ORDER BY name ASC",
+    );
+    res.json(rows.map((row) => row.name));
+  } catch (err) {
+    res.status(500).json({ error: "Error" });
+  }
+});
+
+// GET MEMES (อัปเกรด FYP Algorithm)
+app.get("/api/memes", optionalAuth, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 12;
+    const search = req.query.search || "";
+    const category = req.query.category || "All";
+    const sort = req.query.sort || "fyp"; // เปลี่ยน Default เป็น FYP
+    const offset = (page - 1) * limit;
+    const userId = req.user ? req.user.id : 0;
+
+    let orderByClause = "ORDER BY m.created_at DESC"; // Default fallback
+
+    // FYP Algorithm Logic
+    if (sort === "fyp" && userId > 0) {
+      // 1. หาหมวดหมู่ที่ user คนนี้ชอบมากที่สุด 3 อันดับแรก
+      const [favCats] = await pool.query(
+        `
+            SELECT m.category, COUNT(*) as count
+            FROM meme_likes ml
+            JOIN memes m ON ml.meme_id = m.id
+            WHERE ml.user_id = ?
+            GROUP BY m.category
+            ORDER BY count DESC LIMIT 3
+        `,
+        [userId],
+      );
+
+      if (favCats.length > 0) {
+        // ถ้ามีประวัติการไลค์ ให้ดันหมวดพวกนี้ขึ้นก่อน แล้วค่อยสุ่ม
+        const favCatNames = favCats.map((c) => `'${c.category}'`).join(",");
+        // Logic: ถ้าอยู่ในหมวดที่ชอบ ให้คะแนน 1, ถ้าไม่ ให้ 0 -> แล้วสุ่มในกลุ่มนั้น
+        orderByClause = `ORDER BY (CASE WHEN m.category IN (${favCatNames}) THEN 1 ELSE 0 END) DESC, RAND()`;
+      } else {
+        // ถ้า User ใหม่ (ไม่มีประวัติ) -> สุ่มล้วนๆ
+        orderByClause = "ORDER BY RAND()";
+      }
+    } else if (sort === "fyp") {
+      // ถ้าไม่ได้ Login -> สุ่มล้วนๆ
+      orderByClause = "ORDER BY RAND()";
+    } else if (sort === "popular") {
+      orderByClause = "ORDER BY m.likes DESC, m.created_at DESC";
+    } else if (sort === "newest") {
+      orderByClause = "ORDER BY m.created_at DESC";
+    }
+
+    let query = `
+      SELECT m.id, m.title, m.category, m.likes, m.created_at, m.image, m.created_by,
+      mem.name_mem as uploader, (ml.id IS NOT NULL) as isLiked
+      FROM memes m
+      LEFT JOIN members mem ON m.created_by = mem.id_mem
+      LEFT JOIN meme_likes ml ON m.id = ml.meme_id AND ml.user_id = ?
+    `;
+
+    const params = [userId];
+    const conditions = [];
+
+    if (search) {
+      conditions.push(`(m.title LIKE ? OR m.category LIKE ?)`);
+      params.push(`%${search}%`, `%${search}%`);
+    }
+    if (category && category !== "All") {
+      conditions.push(`m.category = ?`);
+      params.push(category);
+    }
+
+    if (conditions.length > 0) query += ` WHERE ` + conditions.join(" AND ");
+
+    query += ` ${orderByClause} LIMIT ? OFFSET ?`;
+    params.push(limit, offset);
+
+    const [rows] = await pool.query(query, params);
+    const memesWithUrl = rows.map((meme) => ({
+      ...meme,
+      imageUrl: meme.image ? `/uploads/${meme.image}` : null,
+      isLiked: Boolean(meme.isLiked),
+    }));
+
+    res.set("Cache-Control", "no-store");
+    res.json({ data: memesWithUrl });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ... (Routes อื่นๆ POST/PUT/DELETE คงเดิม) ...
+app.post("/api/memes", auth, async (req, res) => {
+  const { title, image, category } = req.body;
+  try {
+    const matches = image.match(/^data:image\/([A-Za-z-+\/]+);base64,(.+)$/);
+    if (!matches) return res.status(400).json({ error: "Invalid image" });
+    const filename = `${uuidv4()}.${matches[1] === "jpeg" ? "jpg" : matches[1]}`;
+    fs.writeFileSync(
+      path.join("uploads", filename),
+      Buffer.from(matches[2], "base64"),
+    );
+    await pool.query(
+      "INSERT INTO memes (title, image, category, created_by, likes) VALUES (?, ?, ?, ?, 0)",
+      [title, filename, category || "General", req.user.id],
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: "Upload failed" });
+  }
+});
+
+app.put("/api/memes/:id", auth, async (req, res) => {
+  const { category } = req.body;
+  try {
+    const [meme] = await pool.query(
+      "SELECT created_by FROM memes WHERE id = ?",
+      [req.params.id],
+    );
+    if (!meme[0]) return res.status(404).json({ error: "Not found" });
+    if (
+      req.user.role !== "admin" &&
+      Number(req.user.id) !== Number(meme[0].created_by)
+    )
+      return res.status(403).json({ error: "Forbidden" });
+    await pool.query("UPDATE memes SET category = ? WHERE id = ?", [
+      category,
+      req.params.id,
+    ]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/memes/:id/like", auth, async (req, res) => {
   const conn = await pool.getConnection();
   try {
-    await conn.execute(`
-      CREATE TABLE IF NOT EXISTS memes (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        title VARCHAR(255) NOT NULL,
-        description TEXT,
-        image LONGBLOB NOT NULL,
-        category VARCHAR(50),
-        likes INT DEFAULT 0,
-        created_by INT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (created_by) REFERENCES members(id_mem) ON DELETE CASCADE
-      )
-    `);
-    
-    // Track likes per user
-    await conn.execute(`
-      CREATE TABLE IF NOT EXISTS meme_likes (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        meme_id INT NOT NULL,
-        user_id INT NOT NULL,
-        UNIQUE KEY unique_like (meme_id, user_id),
-        FOREIGN KEY (meme_id) REFERENCES memes(id) ON DELETE CASCADE,
-        FOREIGN KEY (user_id) REFERENCES members(id_mem) ON DELETE CASCADE
-      )
-    `);
-    
-    console.log('✓ Database ready');
+    await conn.beginTransaction();
+    const [exists] = await conn.query(
+      "SELECT id FROM meme_likes WHERE meme_id = ? AND user_id = ?",
+      [req.params.id, req.user.id],
+    );
+    let status = "liked";
+    if (exists.length > 0) {
+      await conn.query("DELETE FROM meme_likes WHERE id = ?", [exists[0].id]);
+      await conn.query(
+        "UPDATE memes SET likes = GREATEST(0, likes - 1) WHERE id = ?",
+        [req.params.id],
+      );
+      status = "unliked";
+    } else {
+      await conn.query(
+        "INSERT INTO meme_likes (meme_id, user_id) VALUES (?, ?)",
+        [req.params.id, req.user.id],
+      );
+      await conn.query("UPDATE memes SET likes = likes + 1 WHERE id = ?", [
+        req.params.id,
+      ]);
+    }
+    await conn.commit();
+    res.json({ status });
+  } catch (err) {
+    await conn.rollback();
+    res.status(500).json({ error: "Failed" });
   } finally {
     conn.release();
   }
-}
-
-initDatabase();
-
-// Middleware: Verify JWT token
-function verifyToken(req, res, next) {
-  const token = req.headers['authorization']?.split(' ')[1];
-  if (!token) return res.status(401).json({ error: 'No token' });
-  try {
-    req.user = jwt.verify(token, SECRET_KEY);
-    next();
-  } catch {
-    res.status(401).json({ error: 'Invalid token' });
-  }
-}
-
-// Middleware: Check admin role
-async function checkAdmin(req, res, next) {
-  if (!req.user) return res.status(401).json({ error: 'Not authenticated' });
-  
-  try {
-    const conn = await pool.getConnection();
-    const [user] = await conn.execute('SELECT role FROM members WHERE id_mem = ?', [req.user.id]);
-    conn.release();
-    
-    if (!user[0] || user[0].role !== 'admin') {
-      return res.status(403).json({ error: 'Admin access required' });
-    }
-    next();
-  } catch (err) {
-    res.status(500).json({ error: 'Permission check failed' });
-  }
-}
-
-// Get all memes (images fetched separately)
-app.get('/api/memes', async (req, res) => {
-  try {
-    const conn = await pool.getConnection();
-    const [memes] = await conn.execute(`
-      SELECT m.id, m.title, m.description, m.category, m.likes, 
-             m.created_by, m.created_at, mem.name_mem
-      FROM memes m
-      LEFT JOIN members mem ON m.created_by = mem.id_mem
-      ORDER BY m.created_at DESC
-      LIMIT 100
-    `);
-    conn.release();
-    
-    res.json(memes.map(m => ({
-      id: m.id,
-      title: m.title,
-      description: m.description || '',
-      category: m.category || 'อื่นๆ',
-      likes: m.likes || 0,
-      uploadedBy: m.name_mem || 'Unknown',
-      uploadedAt: m.created_at
-    })));
-  } catch (err) {
-    console.error('GET /api/memes error:', err.message);
-    res.status(500).json({ error: 'Failed to load memes' });
-  }
 });
 
-// Get meme image binary
-app.get('/api/memes/:id/image', async (req, res) => {
+app.delete("/api/memes/:id", auth, async (req, res) => {
   try {
-    const conn = await pool.getConnection();
-    const [rows] = await conn.execute('SELECT image FROM memes WHERE id = ?', [req.params.id]);
-    conn.release();
-    
-    if (!rows.length || !rows[0].image) {
-      return res.status(404).send('Not found');
-    }
-    
-    const buf = rows[0].image;
-    let type = 'image/png';
-    if (buf[0] === 0xFF && buf[1] === 0xD8) type = 'image/jpeg';
-    else if (buf[0] === 0x47 && buf[1] === 0x49) type = 'image/gif';
-    
-    res.setHeader('Content-Type', type);
-    res.setHeader('Cache-Control', 'max-age=31536000, immutable');
-    res.send(buf);
-  } catch (err) {
-    console.error('Image error:', err.message);
-    res.status(500).send('Error');
-  }
-});
-
-// Download meme
-app.get('/api/memes/:id/download', async (req, res) => {
-  try {
-    const conn = await pool.getConnection();
-    const [rows] = await conn.execute('SELECT image, title FROM memes WHERE id = ?', [req.params.id]);
-    conn.release();
-    
-    if (!rows.length) return res.status(404).json({ error: 'Not found' });
-    
-    res.setHeader('Content-Type', 'image/png');
-    res.setHeader('Content-Disposition', `attachment; filename="${rows[0].title}.png"`);
-    res.send(rows[0].image);
-  } catch (err) {
-    res.status(500).json({ error: 'Download failed' });
-  }
-});
-
-// Upload meme
-app.post('/api/memes/upload', verifyToken, async (req, res) => {
-  const { title, description, image, category } = req.body;
-  if (!title || !image) return res.status(400).json({ error: 'Title and image required' });
-
-  try {
-    let b64 = image;
-    if (b64.includes(',')) b64 = b64.split(',')[1];
-    
-    const buf = Buffer.from(b64, 'base64');
-    if (buf.length === 0) return res.status(400).json({ error: 'Invalid image' });
-
-    const conn = await pool.getConnection();
-    await conn.execute(
-      'INSERT INTO memes (title, description, image, category, created_by) VALUES (?, ?, ?, ?, ?)',
-      [title, description || '', buf, category || 'อื่นๆ', req.user.id]
+    const [meme] = await pool.query(
+      "SELECT created_by, image FROM memes WHERE id = ?",
+      [req.params.id],
     );
-    conn.release();
-    
-    res.status(201).json({ success: true });
-  } catch (err) {
-    console.error('Upload error:', err.message);
-    res.status(500).json({ error: 'Upload failed' });
-  }
-});
-
-// Like meme (one per user)
-app.post('/api/memes/:id/like', verifyToken, async (req, res) => {
-  try {
-    const conn = await pool.getConnection();
-    
-    // Try to insert like
-    try {
-      await conn.execute(
-        'INSERT INTO meme_likes (meme_id, user_id) VALUES (?, ?)',
-        [req.params.id, req.user.id]
-      );
-      // Increment counter
-      await conn.execute('UPDATE memes SET likes = likes + 1 WHERE id = ?', [req.params.id]);
-    } catch (err) {
-      if (err.code === 'ER_DUP_ENTRY') {
-        conn.release();
-        return res.status(400).json({ error: 'Already liked' });
-      }
-      throw err;
-    }
-    
-    conn.release();
+    if (!meme[0]) return res.status(404).json({ error: "Not found" });
+    if (
+      req.user.role !== "admin" &&
+      Number(req.user.id) !== Number(meme[0].created_by)
+    )
+      return res.status(403).json({ error: "Forbidden" });
+    const filePath = path.join("uploads", meme[0].image);
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    await pool.query("DELETE FROM meme_likes WHERE meme_id = ?", [
+      req.params.id,
+    ]);
+    await pool.query("DELETE FROM memes WHERE id = ?", [req.params.id]);
     res.json({ success: true });
   } catch (err) {
-    console.error('Like error:', err.message);
-    res.status(500).json({ error: 'Like failed' });
+    res.status(500).json({ error: err.message });
   }
 });
 
-// Delete meme (admin only)
-app.delete('/api/memes/:id', verifyToken, checkAdmin, async (req, res) => {
+app.get("/api/memes/:id/image", async (req, res) => {
   try {
-    const conn = await pool.getConnection();
-    await conn.execute('DELETE FROM memes WHERE id = ?', [req.params.id]);
-    conn.release();
-    res.json({ success: true });
+    const [rows] = await pool.query("SELECT image FROM memes WHERE id = ?", [
+      req.params.id,
+    ]);
+    if (!rows[0]) return res.status(404).send("Not found");
+    res.redirect(`/uploads/${rows[0].image}`);
   } catch (err) {
-    res.status(500).json({ error: 'Delete failed' });
+    res.status(500).send("Error");
   }
 });
 
-// Ban user (admin only)
-app.post('/api/admin/ban/:userId', verifyToken, checkAdmin, async (req, res) => {
-  try {
-    const conn = await pool.getConnection();
-    await conn.execute('UPDATE members SET is_banned = 1 WHERE id_mem = ?', [req.params.userId]);
-    conn.release();
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: 'Ban failed' });
-  }
-});
-
-// Unban user (admin only)
-app.post('/api/admin/unban/:userId', verifyToken, checkAdmin, async (req, res) => {
-  try {
-    const conn = await pool.getConnection();
-    await conn.execute('UPDATE members SET is_banned = 0 WHERE id_mem = ?', [req.params.userId]);
-    conn.release();
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: 'Unban failed' });
-  }
-});
-
-// Get all users
-app.get('/api/admin/users', verifyToken, checkAdmin, async (req, res) => {
-  try {
-    const conn = await pool.getConnection();
-    const [users] = await conn.execute('SELECT id_mem, name_mem, email_mem, role, is_banned FROM members');
-    conn.release();
-    res.json(users);
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to load users' });
-  }
-});
-
-// Register
-app.post('/api/register', async (req, res) => {
-  const { email, password, name } = req.body;
-  if (!email || !password || !name) {
-    return res.status(400).json({ error: 'Email, password, name required' });
-  }
-
-  try {
-    const conn = await pool.getConnection();
-    const hashedPw = await bcrypt.hash(password, 10);
-    
-    await conn.execute(
-      'INSERT INTO members (name_mem, email_mem, password_mem, password_encrypted, role) VALUES (?, ?, ?, ?, ?)',
-      [name, email, password, hashedPw, 'user']
-    );
-    conn.release();
-    
-    res.status(201).json({ success: true });
-  } catch (err) {
-    if (err.code === 'ER_DUP_ENTRY') {
-      return res.status(400).json({ error: 'Email already exists' });
-    }
-    res.status(500).json({ error: 'Registration failed' });
-  }
-});
-
-// Login
-app.post('/api/login', async (req, res) => {
-  const { email, password } = req.body;
-  if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
-
-  try {
-    const conn = await pool.getConnection();
-    const [rows] = await conn.execute(
-      'SELECT id_mem, name_mem, email_mem, password_mem, password_encrypted, role FROM members WHERE email_mem = ?',
-      [email]
-    );
-    conn.release();
-
-    if (!rows.length) return res.status(401).json({ error: 'Invalid credentials' });
-
-    const user = rows[0];
-    let match = user.password_mem === password || await bcrypt.compare(password, user.password_encrypted || '');
-    
-    if (!match) return res.status(401).json({ error: 'Invalid credentials' });
-
-    const token = jwt.sign(
-      { id: user.id_mem, email, name: user.name_mem, role: user.role || 'user' },
-      SECRET_KEY,
-      { expiresIn: '7d' }
-    );
-    
-    res.json({
-      token,
-      user: { id: user.id_mem, name: user.name_mem, email, role: user.role || 'user' }
-    });
-  } catch (err) {
-    console.error('Login error:', err.message);
-    res.status(500).json({ error: 'Login failed' });
-  }
-});
-
-// Get profile
-app.get('/api/user/profile', verifyToken, async (req, res) => {
-  try {
-    const conn = await pool.getConnection();
-    const [rows] = await conn.execute(
-      'SELECT id_mem, name_mem, email_mem, role FROM members WHERE id_mem = ?',
-      [req.user.id]
-    );
-    conn.release();
-    
-    if (!rows.length) return res.status(404).json({ error: 'User not found' });
-    res.json({
-      id: rows[0].id_mem,
-      name: rows[0].name_mem,
-      email: rows[0].email_mem,
-      role: rows[0].role || 'user'
-    });
-  } catch (err) {
-    res.status(500).json({ error: 'Profile failed' });
-  }
-});
-
-// Serve React SPA - fallback route
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'dist', 'index.html'));
-});
-
-app.listen(PORT, () => {
-  console.log(`✓ Server running on port ${PORT}`);
-  console.log(`✓ Database: Narongrit`);
-  console.log(`✓ API available at http://localhost:${PORT}/api`);
-});
+app.listen(PORT, () =>
+  console.log(`Server running on http://localhost:${PORT}`),
+);

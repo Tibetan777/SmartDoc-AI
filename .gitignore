@@ -1,4 +1,18 @@
-# Logs
+# --- Dependencies & Build ---
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# --- Environment & Secrets (สำคัญมาก) ---
+.env
+.env.local
+.env.*.local
+
+# --- Uploads (User Content) ---
+uploads/
+
+# --- Logs ---
 logs
 *.log
 npm-debug.log*
@@ -7,12 +21,7 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
-*.local
-
-# Editor directories and files
+# --- Editor / IDE ---
 .vscode/*
 !.vscode/extensions.json
 .idea
