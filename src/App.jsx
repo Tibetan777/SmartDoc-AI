@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Login from "./components/login/Login";
-import Dashboard from "./components/Dashboard/Dashboard"; // ตรวจสอบตัวพิมพ์เล็ก-ใหญ่ของโฟลเดอร์
+import Dashboard from "./components/Dashboard/Dashboard";
 import DocumentWorkspace from "./components/workspace/DocumentWorkspace";
+import Settings from "./components/settings/Settings"; // Import ใหม่
 import "./App.css";
 
 export default function App() {
@@ -29,8 +30,19 @@ export default function App() {
     setUser(null);
   };
 
-  // src/App.jsx
-  if (loading) return <div className="loading-screen">Loading SmartDoc...</div>; // ต้องมี UI บอก
+  if (loading)
+    return (
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "center",
+          alignItems: "center",
+          height: "100vh",
+        }}
+      >
+        Loading...
+      </div>
+    );
 
   return (
     <BrowserRouter>
@@ -45,6 +57,7 @@ export default function App() {
             )
           }
         />
+
         <Route
           path="/"
           element={
@@ -55,7 +68,25 @@ export default function App() {
             )
           }
         />
-        {/* ... อื่น ๆ ... */}
+
+        <Route
+          path="/file/:id"
+          element={user ? <DocumentWorkspace /> : <Navigate to="/login" />}
+        />
+
+        {/* Route ใหม่ */}
+        <Route
+          path="/settings"
+          element={
+            user ? (
+              <Settings user={user} onLogout={handleLogout} />
+            ) : (
+              <Navigate to="/login" />
+            )
+          }
+        />
+
+        <Route path="*" element={<Navigate to="/" />} />
       </Routes>
     </BrowserRouter>
   );
