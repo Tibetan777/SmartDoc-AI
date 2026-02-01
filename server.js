@@ -5,25 +5,21 @@ import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import helmet from "helmet";
 import compression from "compression";
-import rateLimit from "express-rate-limit";
 import fs from "fs";
 import path from "path";
 import { v4 as uuidv4 } from "uuid";
-import Joi from "joi";
 import dotenv from "dotenv";
 import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const envPath = path.join(__dirname, ".env");
-
-console.log("Loading .env from:", envPath);
-dotenv.config({ path: envPath });
+dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const SECRET = process.env.JWT_SECRET;
 
+// Initial Setup
 if (!SECRET) {
   console.error("FATAL: JWT_SECRET missing");
   process.exit(1);
@@ -33,9 +29,8 @@ if (!fs.existsSync("uploads")) fs.mkdirSync("uploads");
 app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(compression());
 app.use(cors());
-app.use(express.json({ limit: "10mb" }));
-app.set("trust proxy", 1);
-app.use("/uploads", express.static("uploads", { maxAge: "1y", etag: false }));
+app.use(express.json({ limit: "50mb" })); // เพิ่ม Limit สำหรับไฟล์ใหญ่
+app.use("/uploads", express.static("uploads"));
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST,
@@ -44,9 +39,9 @@ const pool = mysql.createPool({
   database: process.env.DB_NAME,
   waitForConnections: true,
   connectionLimit: 50,
-  queueLimit: 0,
 });
 
+// Middleware
 const auth = (req, res, next) => {
   const token = req.headers["authorization"]?.split(" ")[1];
   if (!token) return res.status(401).json({ error: "Unauthorized" });
@@ -58,17 +53,7 @@ const auth = (req, res, next) => {
   }
 };
 
-const optionalAuth = (req, res, next) => {
-  const token = req.headers["authorization"]?.split(" ")[1];
-  if (token) {
-    try {
-      req.user = jwt.verify(token, SECRET);
-    } catch (e) {}
-  }
-  next();
-};
-
-// ... (Login/Register/Categories Routes เหมือนเดิม) ...
+// --- AUTH ROUTES ---
 app.post("/api/login", async (req, res) => {
   const { email, password } = req.body;
   try {
@@ -79,7 +64,7 @@ app.post("/api/login", async (req, res) => {
     const user = users[0];
     if (
       !user ||
-      !!(await bcrypt.compare(password, user.password_encrypted || ""))
+      !(await bcrypt.compare(password, user.password_encrypted || ""))
     ) {
       return res.status(401).json({ error: "Invalid credentials" });
     }
@@ -91,235 +76,155 @@ app.post("/api/login", async (req, res) => {
       user: { id: user.id_mem, name: user.name_mem, role: user.role },
     });
   } catch (err) {
-    res.status(500).json({ error: "Error" });
+    res.status(500).json({ error: "Login failed" });
   }
 });
 
-app.post("/api/register", async (req, res) => {
-  const { name, email, password } = req.body;
-  try {
-    const hashed = await bcrypt.hash(password, 10);
-    await pool.query(
-      "INSERT INTO members (name_mem, email_mem, password_encrypted, role) VALUES (?, ?, ?, ?)",
-      [name, email, hashed, "user"],
-    );
-    res.json({ success: true });
-  } catch (err) {
-    res.status(400).json({ error: "Email exists" });
-  }
-});
-
-app.get("/api/categories", async (req, res) => {
+// --- FOLDER ROUTES ---
+app.get("/api/folders", auth, async (req, res) => {
   try {
     const [rows] = await pool.query(
-      "SELECT name FROM categories ORDER BY name ASC",
+      "SELECT * FROM folders WHERE user_id = ? ORDER BY name ASC",
+      [req.user.id],
     );
-    res.json(rows.map((row) => row.name));
-  } catch (err) {
-    res.status(500).json({ error: "Error" });
-  }
-});
-
-// GET MEMES (อัปเกรด FYP Algorithm)
-app.get("/api/memes", optionalAuth, async (req, res) => {
-  try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 12;
-    const search = req.query.search || "";
-    const category = req.query.category || "All";
-    const sort = req.query.sort || "fyp"; // เปลี่ยน Default เป็น FYP
-    const offset = (page - 1) * limit;
-    const userId = req.user ? req.user.id : 0;
-
-    let orderByClause = "ORDER BY m.created_at DESC"; // Default fallback
-
-    // FYP Algorithm Logic
-    if (sort === "fyp" && userId > 0) {
-      // 1. หาหมวดหมู่ที่ user คนนี้ชอบมากที่สุด 3 อันดับแรก
-      const [favCats] = await pool.query(
-        `
-            SELECT m.category, COUNT(*) as count
-            FROM meme_likes ml
-            JOIN memes m ON ml.meme_id = m.id
-            WHERE ml.user_id = ?
-            GROUP BY m.category
-            ORDER BY count DESC LIMIT 3
-        `,
-        [userId],
-      );
-
-      if (favCats.length > 0) {
-        // ถ้ามีประวัติการไลค์ ให้ดันหมวดพวกนี้ขึ้นก่อน แล้วค่อยสุ่ม
-        const favCatNames = favCats.map((c) => `'${c.category}'`).join(",");
-        // Logic: ถ้าอยู่ในหมวดที่ชอบ ให้คะแนน 1, ถ้าไม่ ให้ 0 -> แล้วสุ่มในกลุ่มนั้น
-        orderByClause = `ORDER BY (CASE WHEN m.category IN (${favCatNames}) THEN 1 ELSE 0 END) DESC, RAND()`;
-      } else {
-        // ถ้า User ใหม่ (ไม่มีประวัติ) -> สุ่มล้วนๆ
-        orderByClause = "ORDER BY RAND()";
-      }
-    } else if (sort === "fyp") {
-      // ถ้าไม่ได้ Login -> สุ่มล้วนๆ
-      orderByClause = "ORDER BY RAND()";
-    } else if (sort === "popular") {
-      orderByClause = "ORDER BY m.likes DESC, m.created_at DESC";
-    } else if (sort === "newest") {
-      orderByClause = "ORDER BY m.created_at DESC";
-    }
-
-    let query = `
-      SELECT m.id, m.title, m.category, m.likes, m.created_at, m.image, m.created_by,
-      mem.name_mem as uploader, (ml.id IS NOT NULL) as isLiked
-      FROM memes m
-      LEFT JOIN members mem ON m.created_by = mem.id_mem
-      LEFT JOIN meme_likes ml ON m.id = ml.meme_id AND ml.user_id = ?
-    `;
-
-    const params = [userId];
-    const conditions = [];
-
-    if (search) {
-      conditions.push(`(m.title LIKE ? OR m.category LIKE ?)`);
-      params.push(`%${search}%`, `%${search}%`);
-    }
-    if (category && category !== "All") {
-      conditions.push(`m.category = ?`);
-      params.push(category);
-    }
-
-    if (conditions.length > 0) query += ` WHERE ` + conditions.join(" AND ");
-
-    query += ` ${orderByClause} LIMIT ? OFFSET ?`;
-    params.push(limit, offset);
-
-    const [rows] = await pool.query(query, params);
-    const memesWithUrl = rows.map((meme) => ({
-      ...meme,
-      imageUrl: meme.image ? `/uploads/${meme.image}` : null,
-      isLiked: Boolean(meme.isLiked),
-    }));
-
-    res.set("Cache-Control", "no-store");
-    res.json({ data: memesWithUrl });
+    res.json(rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// ... (Routes อื่นๆ POST/PUT/DELETE คงเดิม) ...
-app.post("/api/memes", auth, async (req, res) => {
-  const { title, image, category } = req.body;
+app.post("/api/folders", auth, async (req, res) => {
+  const { name, parent_id } = req.body;
   try {
-    const matches = image.match(/^data:image\/([A-Za-z-+\/]+);base64,(.+)$/);
-    if (!matches) return res.status(400).json({ error: "Invalid image" });
-    const filename = `${uuidv4()}.${matches[1] === "jpeg" ? "jpg" : matches[1]}`;
+    const [result] = await pool.query(
+      "INSERT INTO folders (name, user_id, parent_id) VALUES (?, ?, ?)",
+      [name, req.user.id, parent_id || null],
+    );
+    res.json({ id: result.insertId, name });
+  } catch (err) {
+    res.status(500).json({ error: "Cannot create folder" });
+  }
+});
+
+// --- DOCUMENT ROUTES ---
+app.get("/api/files", auth, async (req, res) => {
+  try {
+    const { folder_id, search } = req.query;
+    let query = `SELECT d.*, mem.name_mem as uploader 
+                 FROM documents d 
+                 JOIN members mem ON d.user_id = mem.id_mem 
+                 WHERE d.user_id = ?`;
+    const params = [req.user.id];
+
+    if (folder_id) {
+      query += " AND d.folder_id = ?";
+      params.push(folder_id);
+    }
+    if (search) {
+      query += " AND d.file_name LIKE ?";
+      params.push(`%${search}%`);
+    }
+
+    query += " ORDER BY d.created_at DESC";
+    const [rows] = await pool.query(query, params);
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Smart Upload & AI Analyze
+app.post("/api/files/upload", auth, async (req, res) => {
+  const { fileName, fileData, folderId, tags } = req.body; // fileData is base64
+  try {
+    const extension = fileName.split(".").pop();
+    const uniqueName = `${uuidv4()}.${extension}`;
+
+    // Save binary file
+    const base64Data = fileData.replace(/^data:.*?;base64,/, "");
     fs.writeFileSync(
-      path.join("uploads", filename),
-      Buffer.from(matches[2], "base64"),
+      path.join("uploads", uniqueName),
+      Buffer.from(base64Data, "base64"),
     );
-    await pool.query(
-      "INSERT INTO memes (title, image, category, created_by, likes) VALUES (?, ?, ?, ?, 0)",
-      [title, filename, category || "General", req.user.id],
+
+    const [result] = await pool.query(
+      `INSERT INTO documents (file_name, file_path, file_type, file_size, user_id, folder_id, tags) 
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        fileName,
+        uniqueName,
+        extension,
+        "N/A",
+        req.user.id,
+        folderId || null,
+        JSON.stringify(tags || []),
+      ],
     );
-    res.json({ success: true });
+
+    res.json({ success: true, id: result.insertId });
   } catch (err) {
     res.status(500).json({ error: "Upload failed" });
   }
 });
 
-app.put("/api/memes/:id", auth, async (req, res) => {
-  const { category } = req.body;
-  try {
-    const [meme] = await pool.query(
-      "SELECT created_by FROM memes WHERE id = ?",
-      [req.params.id],
-    );
-    if (!meme[0]) return res.status(404).json({ error: "Not found" });
+// Mock AI Analyze Endpoint (สำหรับการจัดกลุ่มก่อนบันทึก)
+app.post("/api/files/analyze", auth, (req, res) => {
+  const { files } = req.body; // รับ array ของชื่อไฟล์
+  const suggestions = files.map((name) => {
+    let folder = "General";
     if (
-      req.user.role !== "admin" &&
-      Number(req.user.id) !== Number(meme[0].created_by)
+      name.toLowerCase().includes("invoice") ||
+      name.toLowerCase().includes("slip")
     )
-      return res.status(403).json({ error: "Forbidden" });
-    await pool.query("UPDATE memes SET category = ? WHERE id = ?", [
-      category,
-      req.params.id,
-    ]);
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+      folder = "Finance";
+    if (
+      name.toLowerCase().includes("legal") ||
+      name.toLowerCase().includes("contract")
+    )
+      folder = "Legal";
+    if (
+      name.toLowerCase().includes("slide") ||
+      name.toLowerCase().includes("lecture")
+    )
+      folder = "Education";
+    return { fileName: name, suggestedFolder: folder };
+  });
+  res.json(suggestions);
 });
 
-app.post("/api/memes/:id/like", auth, async (req, res) => {
-  const conn = await pool.getConnection();
+app.delete("/api/files/:id", auth, async (req, res) => {
   try {
-    await conn.beginTransaction();
-    const [exists] = await conn.query(
-      "SELECT id FROM meme_likes WHERE meme_id = ? AND user_id = ?",
+    const [file] = await pool.query(
+      "SELECT file_path FROM documents WHERE id = ? AND user_id = ?",
       [req.params.id, req.user.id],
     );
-    let status = "liked";
-    if (exists.length > 0) {
-      await conn.query("DELETE FROM meme_likes WHERE id = ?", [exists[0].id]);
-      await conn.query(
-        "UPDATE memes SET likes = GREATEST(0, likes - 1) WHERE id = ?",
-        [req.params.id],
-      );
-      status = "unliked";
-    } else {
-      await conn.query(
-        "INSERT INTO meme_likes (meme_id, user_id) VALUES (?, ?)",
-        [req.params.id, req.user.id],
-      );
-      await conn.query("UPDATE memes SET likes = likes + 1 WHERE id = ?", [
-        req.params.id,
-      ]);
-    }
-    await conn.commit();
-    res.json({ status });
-  } catch (err) {
-    await conn.rollback();
-    res.status(500).json({ error: "Failed" });
-  } finally {
-    conn.release();
-  }
-});
+    if (!file[0]) return res.status(404).json({ error: "File not found" });
 
-app.delete("/api/memes/:id", auth, async (req, res) => {
-  try {
-    const [meme] = await pool.query(
-      "SELECT created_by, image FROM memes WHERE id = ?",
-      [req.params.id],
-    );
-    if (!meme[0]) return res.status(404).json({ error: "Not found" });
-    if (
-      req.user.role !== "admin" &&
-      Number(req.user.id) !== Number(meme[0].created_by)
-    )
-      return res.status(403).json({ error: "Forbidden" });
-    const filePath = path.join("uploads", meme[0].image);
-    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-    await pool.query("DELETE FROM meme_likes WHERE meme_id = ?", [
-      req.params.id,
-    ]);
-    await pool.query("DELETE FROM memes WHERE id = ?", [req.params.id]);
+    // Delete Physical File
+    const fullPath = path.join("uploads", file[0].file_path);
+    if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+
+    await pool.query("DELETE FROM documents WHERE id = ?", [req.params.id]);
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Delete failed" });
   }
 });
 
-app.get("/api/memes/:id/image", async (req, res) => {
+// GET Document Details for Workspace
+app.get("/api/files/:id", auth, async (req, res) => {
   try {
-    const [rows] = await pool.query("SELECT image FROM memes WHERE id = ?", [
-      req.params.id,
-    ]);
-    if (!rows[0]) return res.status(404).send("Not found");
-    res.redirect(`/uploads/${rows[0].image}`);
+    const [rows] = await pool.query(
+      "SELECT * FROM documents WHERE id = ? AND user_id = ?",
+      [req.params.id, req.user.id],
+    );
+    if (!rows[0]) return res.status(404).json({ error: "File not found" });
+    res.json(rows[0]);
   } catch (err) {
-    res.status(500).send("Error");
+    res.status(500).json({ error: err.message });
   }
 });
 
 app.listen(PORT, () =>
-  console.log(`Server running on http://localhost:${PORT}`),
+  console.log(`SmartDoc AI Server running on http://localhost:${PORT}`),
 );
