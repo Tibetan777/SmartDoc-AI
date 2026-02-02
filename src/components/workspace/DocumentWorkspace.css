@@ -1,247 +1,242 @@
-/* Container หลักแบบเต็มจอ ไม่ให้มี Scrollbar ซ้อน */
+/* DocumentWorkspace.css */
 .workspace-container {
   display: flex;
-  height: 100vh;
-  width: 100vw;
-  background-color: #f3f6fc;
-  overflow: hidden;
-  font-family:
-    "Inter",
-    -apple-system,
-    BlinkMacSystemFont,
-    sans-serif;
-}
-
-/* --- ฝั่งซ้าย: Document Viewer --- */
-.doc-viewer {
-  flex: 1.5; /* กว้างกว่าฝั่งแชท */
-  display: flex;
   flex-direction: column;
-  border-right: 1px solid #e0e0e0;
-  background-color: #525659; /* สีพื้นหลังเหมือน PDF Viewer ทั่วไป */
+  height: 100%; /* เต็มพื้นที่ของ Parent (Content Area) */
+  width: 100%;
+  background-color: #fff;
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
+  animation: slideIn 0.3s ease-out;
 }
 
-.viewer-header {
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Header ส่วนตัวของ Workspace */
+.workspace-header {
   height: 60px;
-  background-color: white;
-  border-bottom: 1px solid #e0e0e0;
+  background: #fff;
+  border-bottom: 1px solid #e5e7eb;
   display: flex;
+  align-items: center;
   justify-content: space-between;
-  align-items: center;
-  padding: 0 20px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-  z-index: 10;
+  padding: 0 24px;
 }
 
-.viewer-header h3 {
-  font-size: 16px;
-  font-weight: 600;
-  color: #333;
+.ws-file-info {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
+  font-weight: 600;
+  color: #1f2937;
+  font-size: 16px;
 }
 
-.btn-close {
-  background: transparent;
-  border: 1px solid #dadce0;
+.ws-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* ปุ่ม OCR */
+.btn-tool {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 8px 16px;
-  border-radius: 20px;
+  background: #eff6ff;
+  color: #1a73e8;
+  border: none;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 13px;
   cursor: pointer;
-  font-size: 14px;
-  color: #5f6368;
   transition: all 0.2s;
 }
-
-.btn-close:hover {
-  background-color: #f1f3f4;
-  color: #333;
+.btn-tool:hover {
+  background: #dbeafe;
 }
 
-.viewer-body {
+/* ปุ่ม Close */
+.btn-close {
+  background: none;
+  border: none;
+  padding: 8px;
+  cursor: pointer;
+  color: #6b7280;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.btn-close:hover {
+  background: #f3f4f6;
+  color: #1f2937;
+}
+
+/* Layout ซ้ายขวา */
+.workspace-body {
+  display: flex;
   flex: 1;
-  position: relative;
   overflow: hidden;
 }
 
-.viewer-body iframe {
+.doc-viewer-panel {
+  flex: 1.5;
+  background: #525659;
+  position: relative;
+}
+.doc-viewer-panel iframe {
   width: 100%;
   height: 100%;
   border: none;
-  background: white;
 }
 
-/* --- ฝั่งขวา: AI Intelligence Hub --- */
+/* AI Panel */
 .ai-panel {
   flex: 1;
+  min-width: 320px;
+  max-width: 450px;
   display: flex;
   flex-direction: column;
-  background-color: white;
-  min-width: 350px;
-  max-width: 500px;
+  background: #fff;
+  border-left: 1px solid #e5e7eb;
 }
 
-/* Tabs ด้านบน */
-.ai-tabs {
+.ai-header {
+  height: 50px;
+  padding: 0 20px;
+  border-bottom: 1px solid #f3f4f6;
   display: flex;
-  border-bottom: 1px solid #e0e0e0;
+  align-items: center;
+  justify-content: space-between;
+}
+.ai-header h3 {
+  font-size: 16px;
+  margin: 0;
+  color: #374151;
 }
 
-.tab-btn {
-  flex: 1;
-  padding: 16px;
-  background: none;
-  border: none;
-  font-size: 14px;
-  font-weight: 600;
-  color: #5f6368;
+/* Magic Button */
+.magic-sum-container {
+  position: relative;
+}
+.btn-magic-sum {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 20px;
+  height: 32px;
+  width: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
-  transition: all 0.2s;
-  border-bottom: 2px solid transparent;
-}
-
-.tab-btn:hover {
-  background-color: #f8f9fa;
+  overflow: hidden;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   color: #1a73e8;
 }
-
-.tab-btn.active {
-  color: #1a73e8;
-  border-bottom: 2px solid #1a73e8;
+.btn-magic-sum .icon-state {
+  display: flex;
+  transition: opacity 0.2s;
+}
+.btn-magic-sum .text-state {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  font-weight: 600;
+  font-size: 13px;
+  opacity: 0;
+  transform: translateX(10px);
+  transition: all 0.3s;
+}
+.btn-magic-sum:hover {
+  width: 90px;
+  background: #1a73e8;
+  color: white;
+  border-color: #1a73e8;
+}
+.btn-magic-sum:hover .icon-state {
+  display: none;
+}
+.btn-magic-sum:hover .text-state {
+  display: flex;
+  opacity: 1;
+  transform: translateX(0);
 }
 
-/* พื้นที่เนื้อหา (Chat/Summary) */
-.ai-content {
+/* Chat */
+.chat-messages {
   flex: 1;
-  overflow-y: auto;
   padding: 20px;
-  background-color: #fff;
-}
-
-/* Summary Box Styling */
-.summary-box h4 {
-  color: #1a73e8;
-  margin-bottom: 15px;
-  font-size: 18px;
-}
-
-.summary-text {
-  font-size: 15px;
-  line-height: 1.6;
-  color: #3c4043;
-  text-align: justify;
-}
-
-.tags-container {
-  margin-top: 20px;
-  padding: 15px;
-  background-color: #f8f9fa;
-  border-radius: 8px;
-  border: 1px solid #e0e0e0;
-}
-
-.tag-pill {
-  display: inline-block;
-  background-color: #e8f0fe;
-  color: #1967d2;
-  padding: 4px 12px;
-  border-radius: 16px;
-  font-size: 12px;
-  font-weight: 500;
-  margin-right: 8px;
-  margin-bottom: 8px;
-}
-
-/* Chat Styling */
-.chat-box {
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
-  height: 100%;
+  gap: 12px;
+  background: #f9fafb;
 }
-
-.messages-area {
-  flex: 1;
-  overflow-y: auto;
-  padding-bottom: 20px;
-}
-
-.msg-row {
+.message {
   display: flex;
-  margin-bottom: 15px;
+  width: 100%;
 }
-
-.msg-row.ai {
-  justify-content: flex-start;
-}
-
-.msg-row.user {
+.message.user {
   justify-content: flex-end;
 }
-
-.msg-bubble {
-  max-width: 80%;
-  padding: 12px 16px;
+.bubble {
+  max-width: 85%;
+  padding: 10px 14px;
   border-radius: 12px;
   font-size: 14px;
   line-height: 1.5;
-  position: relative;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
-
-.msg-row.ai .msg-bubble {
-  background-color: #f1f3f4;
-  color: #202124;
-  border-bottom-left-radius: 4px;
-}
-
-.msg-row.user .msg-bubble {
-  background-color: #1a73e8;
+.message.user .bubble {
+  background: #1a73e8;
   color: white;
-  border-bottom-right-radius: 4px;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+  border-bottom-right-radius: 2px;
+}
+.message.ai .bubble {
+  background: white;
+  color: #1f2937;
+  border: 1px solid #e5e7eb;
+  border-bottom-left-radius: 2px;
 }
 
-.typing-indicator {
-  font-size: 12px;
-  color: #9aa0a6;
-  margin-left: 10px;
-  font-style: italic;
-}
-
-/* Chat Input Area */
-.chat-input-form {
-  margin-top: auto;
+.chat-input-area {
+  padding: 16px;
+  border-top: 1px solid #e5e7eb;
   display: flex;
   gap: 10px;
-  padding-top: 15px;
-  border-top: 1px solid #e0e0e0;
+  background: white;
 }
-
-.chat-input {
+.chat-input-area input {
   flex: 1;
-  padding: 12px 16px;
-  border: 1px solid #dadce0;
-  border-radius: 24px;
-  font-size: 14px;
+  padding: 10px 16px;
+  border-radius: 20px;
+  border: 1px solid #d1d5db;
   outline: none;
-  transition: border 0.2s;
+  background: #f9fafb;
 }
-
-.chat-input:focus {
+.chat-input-area input:focus {
   border-color: #1a73e8;
-  box-shadow: 0 0 0 1px #1a73e8;   
+  background: white;
 }
-
-.btn-send {
-  background-color: #1a73e8;
+.chat-input-area button {
+  background: #1a73e8;
   color: white;
   border: none;
   padding: 0 20px;
-  border-radius: 24px;
-  font-weight: 600;
+  border-radius: 20px;
   cursor: pointer;
-  transition: background 0.2s;
-}
-
-.btn-send:hover {
-  background-color: #1557b0;
+  font-weight: 600;
 }

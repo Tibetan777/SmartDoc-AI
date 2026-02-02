@@ -44,6 +44,41 @@ const auth = (req, res, next) => {
   }
 };
 
+app.post("/api/files/upload", auth, async (req, res) => {
+  const { fileName, fileData, folderId, tags } = req.body;
+  try {
+    const extension = fileName.split(".").pop();
+    const uniqueName = `${uuidv4()}.${extension}`;
+    const base64Data = fileData.replace(/^data:.*?;base64,/, "");
+
+    fs.writeFileSync(path.join("uploads", uniqueName), Buffer.from(base64Data, "base64"));
+
+    // Smart Mock Summary Generator
+    let mockSummary = "";
+    const lowerName = fileName.toLowerCase();
+
+    if (lowerName.includes("invoice") || lowerName.includes("slip") || tags.includes("Finance")) {
+      mockSummary = "เอกสารทางการเงิน: ระบุยอดรวมการชำระเงิน วันที่ทำรายการ และรายละเอียดคู่ค้า/ผู้รับบริการ ตรวจพบยอดเงินสำคัญและกำหนดการชำระ";
+    } else if (lowerName.includes("contract") || lowerName.includes("legal") || tags.includes("Legal")) {
+      mockSummary = "เอกสารทางกฎหมาย/สัญญา: ครอบคลุมข้อตกลง เงื่อนไขการให้บริการ ระยะเวลาสัญญา และบทลงโทษหากผิดสัญญา";
+    } else if (lowerName.includes("report") || lowerName.includes("slide")) {
+      mockSummary = "รายงานสรุปผลการดำเนินงาน: นำเสนอข้อมูลสถิติ กราฟแสดงแนวโน้ม และข้อเสนอแนะเชิงกลยุทธ์สำหรับผู้บริหาร";
+    } else {
+      mockSummary = `เอกสารทั่วไป (${extension}): ประกอบด้วยข้อมูล Text และรูปภาพที่เกี่ยวข้องกับหัวข้อ "${fileName}" เหมาะสำหรับการอ้างอิงข้อมูลพื้นฐาน`;
+    }
+
+    const [result] = await pool.query(
+      `INSERT INTO documents (file_name, file_path, file_type, file_size, user_id, folder_id, tags, content_summary) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [fileName, uniqueName, extension, "N/A", req.user.id, folderId || null, JSON.stringify(tags || []), mockSummary]
+    );
+
+    res.json({ success: true, id: result.insertId });
+  } catch (err) {
+    res.status(500).json({ error: "Upload failed" });
+  }
+});
+
 // --- แก้ไขจุดตาย: Register ---
 app.post("/api/register", async (req, res) => {
   const { name, email, password } = req.body;
@@ -84,6 +119,23 @@ app.post("/api/login", async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ error: "Login failed" });
+  }
+});
+app.delete("/api/files/:id", auth, async (req, res) => {
+  try {
+    // ตรวจสอบว่าเป็นเจ้าของไฟล์ไหม
+    const [file] = await pool.query("SELECT file_path FROM documents WHERE id = ? AND user_id = ?", [req.params.id, req.user.id]);
+    if (!file[0]) return res.status(404).json({ error: "File not found or unauthorized" });
+
+    // ลบไฟล์จริง (ถ้ามี)
+    const filePath = path.join("uploads", file[0].file_path);
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+
+    // ลบจาก DB
+    await pool.query("DELETE FROM documents WHERE id = ?", [req.params.id]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: "Delete failed" });
   }
 });
 
